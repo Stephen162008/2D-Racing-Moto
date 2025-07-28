@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Racing Sport</title>
+    <style>
+        body {
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #333;
+            font-family: Arial, sans-serif;
+            overflow: hidden;
+        }
+        #gameContainer {
+            position: relative;
+        }
+        canvas {
+            border: 2px solid white;
+            background-color: #000;
+            display: block;
+        }
+        #score {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            font-size: 24px;
+            font-weight: bold;
+            color: black;
+            display: none; /* Hidden initially */
+        }
+        .screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            text-align: center;
+        }
+        #startScreen {
+            display: flex;
+            /* **CHANGED**: Justify content to push title up */
+            justify-content: flex-start;
+            padding-top: 15%; /* Spacing from the top */
+            background-image: url('lamborghini.jpg');
+            background-size: cover;
+            background-position: center;
+        }
+        #gameOverScreen {
+            display: none;
+            background-color: rgba(0, 0, 0, 0.7);
+        }
+        .title {
+            font-size: 50px;
+            font-weight: bold;
+            margin-bottom: 40px; /* Increased margin for more space */
+            text-shadow: 3px 3px 6px #000;
+        }
+        .button {
+            padding: 15px 30px;
+            font-size: 22px;
+            color: white;
+            background-color: #28a745;
+            border: 2px solid white;
+            border-radius: 5px;
+            cursor: pointer;
+            margin-bottom: 20px;
+            box-shadow: 2px 2px 4px #000;
+        }
+        .button:hover {
+            background-color: #218838;
+        }
+        .button:disabled {
+            background-color: #555;
+            cursor: not-allowed;
+        }
+        .high-score {
+            font-size: 20px;
+            font-weight: bold;
+            text-shadow: 2px 2px 4px #000;
+            background-color: rgba(0,0,0,0.5);
+            padding: 5px 10px;
+            border-radius: 5px;
+        }
+        #shiftGearButton {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            padding: 15px 25px;
+            font-size: 18px;
+            font-weight: bold;
+            color: white;
+            background-color: rgba(0, 86, 179, 0.8);
+            border: 2px solid white;
+            border-radius: 10px;
+            cursor: pointer;
+            z-index: 10;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas" width="500" height="700"></canvas>
+        <div id="score">Score: 0</div>
+        
+        <div id="startScreen" class="screen">
+            <h1 class="title">Racing Sport</h1>
+            <button id="playButton" class="button" disabled>Loading Assets...</button>
+            <div id="highScoreDisplay" class="high-score">Highest Score: 0</div>
+        </div>
+
+        <div id="gameOverScreen" class="screen">
+            <h1 class="title" style="font-size: 40px; margin-bottom: 20px;">Game Over</h1>
+            <button id="restartButton" class="button">Restart</button>
+        </div>
+        
+        <button id="shiftGearButton">Shift Gear</button>
+    </div>
+    <audio id="crashSound" src="carcrash.mp3"></audio>
+
+    <script>
+        // --- Element References ---
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreElement = document.getElementById('score');
+        const startScreen = document.getElementById('startScreen');
+        const gameOverScreen = document.getElementById('gameOverScreen');
+        const playButton = document.getElementById('playButton');
+        const restartButton = document.getElementById('restartButton');
+        const shiftGearButton = document.getElementById('shiftGearButton');
+        const highScoreDisplay = document.getElementById('highScoreDisplay');
+        const crashSound = document.getElementById('crashSound');
+
+        // --- Game State & High Score ---
+        let gameOver, score, isSlowingDown;
+        let speedBoost900Applied, speedBoost1500Applied, speedBoost2000Applied, speedBoost2500Applied;
+        let highScore = localStorage.getItem('racingSportHighScore') || 0;
+
+        // --- Config Constants ---
+        const ROAD_LEFT_BOUNDARY = 70, ROAD_RIGHT_BOUNDARY = 430;
+        const LANE_LEFT_CENTER = 160, LANE_RIGHT_CENTER = 340, LANE_YELLOW_LINE_CENTER = canvas.width / 2;
+        const ENEMY_WIDTH = 65, ENEMY_HEIGHT = 110, COLLISION_PADDING = 8;
+        const LANE_CHANGE_SPEED = 2, SPAWN_CHECK_DISTANCE = ENEMY_HEIGHT * 2.0, PLAYER_SLOW_SPEED = 1.0;
+
+        // --- Asset Loading ---
+        const assetsToLoad = 5;
+        let assetsLoaded = 0;
+        const onAssetLoad = () => {
+            assetsLoaded++;
+            if (assetsLoaded === assetsToLoad) {
+                playButton.disabled = false;
+                playButton.innerText = 'Play';
+            }
+        };
+        const roadImg = new Image(); roadImg.onload = onAssetLoad; roadImg.src = 'road.png';
+        const playerImg = new Image(); playerImg.onload = onAssetLoad; playerImg.src = 'player.png';
+        const enemyImages = [new Image(), new Image(), new Image()];
+        enemyImages.forEach(img => { img.onload = onAssetLoad; });
+        enemyImages[0].src = 'enemy1.png'; enemyImages[1].src = 'enemy2.png'; enemyImages[2].src = 'enemy3.png';
+
+        // --- Dynamic Game Objects ---
+        let player, enemies, playerBaseSpeed, roadSpeed, enemyBaseSpeed, roadY1, roadY2;
+
+        // --- Player Input ---
+        let moveLeft = false, moveRight = false;
+        
+        document.addEventListener('keydown', (e) => { const key = e.key.toLowerCase(); if (key === 'a') moveLeft = true; if (key === 'd') moveRight = true; if (key === 's') isSlowingDown = true; });
+        document.addEventListener('keyup', (e) => { const key = e.key.toLowerCase(); if (key === 'a') moveLeft = false; if (key === 'd') moveRight = false; if (key === 's') isSlowingDown = false; });
+        function isTouchDevice() { return ('ontouchstart' in window) || (navigator.maxTouchPoints > 0); }
+        if (isTouchDevice()) {
+            shiftGearButton.style.display = 'block';
+            canvas.addEventListener('touchstart', handleTouchMove, { passive: false });
+            canvas.addEventListener('touchmove', handleTouchMove, { passive: false });
+            canvas.addEventListener('touchend', handleTouchEnd, { passive: false });
+            canvas.addEventListener('touchcancel', handleTouchEnd, { passive: false });
+            function handleTouchMove(e) { e.preventDefault(); const touchX = e.touches[0].clientX - canvas.getBoundingClientRect().left; if (touchX < canvas.width / 2) { moveLeft = true; moveRight = false; } else { moveLeft = false; moveRight = true; } }
+            function handleTouchEnd(e) { e.preventDefault(); moveLeft = false; moveRight = false; }
+            shiftGearButton.addEventListener('touchstart', (e) => { e.preventDefault(); isSlowingDown = true; });
+            shiftGearButton.addEventListener('touchend', (e) => { e.preventDefault(); isSlowingDown = false; });
+        }
+        
+        // --- Game Setup Functions ---
+        function initializeGame() {
+            gameOver = false; score = 0; isSlowingDown = false;
+            speedBoost900Applied = false; speedBoost1500Applied = false; speedBoost2000Applied = false; speedBoost2500Applied = false;
+            playerBaseSpeed = 4.0; roadSpeed = 5.0; enemyBaseSpeed = 3.2;
+            player = { width: 50, height: 100, x: LANE_RIGHT_CENTER - 25, y: canvas.height - 120, speed: playerBaseSpeed };
+            enemies = []; roadY1 = 0; roadY2 = -canvas.height;
+            scoreElement.innerText = `Score: 0`;
+        }
+
+        function startGame() {
+            initializeGame();
+            startScreen.style.display = 'none';
+            gameOverScreen.style.display = 'none';
+            scoreElement.style.display = 'block';
+            requestAnimationFrame(update);
+        }
+
+        function isAreaClear(x, width, checkDistance) { for (const otherEnemy of enemies) { if (otherEnemy.y < checkDistance && x < otherEnemy.x + otherEnemy.width && x + width > otherEnemy.x) { return false; } } return true; }
+
+        function spawnEnemy() {
+            const lanePositions = { left: LANE_LEFT_CENTER - ENEMY_WIDTH / 2, center: LANE_YELLOW_LINE_CENTER - ENEMY_WIDTH / 2, right: LANE_RIGHT_CENTER - ENEMY_WIDTH / 2 };
+            const isLeftOccupied = !isAreaClear(lanePositions.left, ENEMY_WIDTH, SPAWN_CHECK_DISTANCE);
+            const isCenterOccupied = !isAreaClear(lanePositions.center, ENEMY_WIDTH, SPAWN_CHECK_DISTANCE);
+            const isRightOccupied = !isAreaClear(lanePositions.right, ENEMY_WIDTH, SPAWN_CHECK_DISTANCE);
+            let occupiedCount = (isLeftOccupied ? 1 : 0) + (isCenterOccupied ? 1 : 0) + (isRightOccupied ? 1 : 0);
+            if (occupiedCount >= 2) { return; }
+            const availableLanes = [];
+            if (!isLeftOccupied) availableLanes.push('left');
+            if (score > 2000 && !isCenterOccupied) availableLanes.push('center');
+            if (!isRightOccupied) availableLanes.push('right');
+            if (availableLanes.length === 0) return;
+            const chosenLaneKey = availableLanes[Math.floor(Math.random() * availableLanes.length)];
+            const spawnX = lanePositions[chosenLaneKey];
+            const enemyImg = enemyImages[Math.floor(Math.random() * enemyImages.length)];
+            const newEnemy = { x: spawnX, y: -ENEMY_HEIGHT, width: ENEMY_WIDTH, height: ENEMY_HEIGHT, img: enemyImg, speed: enemyBaseSpeed + Math.random() * 1.5, isLaneChanger: false };
+            if (score > 900 && (chosenLaneKey === 'left' || chosenLaneKey === 'right') && Math.random() < 0.35) {
+                const targetLaneKey = (chosenLaneKey === 'left') ? 'right' : 'left';
+                if (isAreaClear(lanePositions[targetLaneKey], ENEMY_WIDTH, SPAWN_CHECK_DISTANCE * 1.5)) {
+                    newEnemy.isLaneChanger = true;
+                    newEnemy.hasCompletedLaneChange = false;
+                    newEnemy.targetX = lanePositions[targetLaneKey];
+                }
+            }
+            enemies.push(newEnemy);
+        }
+        
+        function handleGameOver() {
+            gameOver = true;
+            crashSound.play();
+            if (score > highScore) {
+                highScore = Math.floor(score);
+                localStorage.setItem('racingSportHighScore', highScore);
+            }
+            scoreElement.style.display = 'none';
+            gameOverScreen.style.display = 'flex';
+        }
+        
+        function update() {
+            if (gameOver) return;
+            const currentMoveSpeed = isSlowingDown ? PLAYER_SLOW_SPEED : player.speed;
+            if (moveLeft) player.x -= currentMoveSpeed;
+            if (moveRight) player.x += currentMoveSpeed;
+            player.x = Math.max(ROAD_LEFT_BOUNDARY, player.x);
+            player.x = Math.min(ROAD_RIGHT_BOUNDARY - player.width, player.x);
+            roadY1 += roadSpeed;
+            roadY2 += roadSpeed;
+            if (roadY1 >= canvas.height) roadY1 = -canvas.height + roadSpeed;
+            if (roadY2 >= canvas.height) roadY2 = -canvas.height + roadSpeed;
+            enemies.forEach(enemy => {
+                enemy.y += enemy.speed;
+                if (enemy.isLaneChanger && !enemy.hasCompletedLaneChange) {
+                    if (enemy.x < enemy.targetX) enemy.x = Math.min(enemy.targetX, enemy.x + LANE_CHANGE_SPEED);
+                    else if (enemy.x > enemy.targetX) enemy.x = Math.max(enemy.targetX, enemy.x - LANE_CHANGE_SPEED);
+                    if (enemy.x === enemy.targetX) enemy.hasCompletedLaneChange = true;
+                }
+            });
+            score += 1;
+            if (score > 100000) score = 100000;
+            scoreElement.innerText = `Score: ${Math.floor(score)}`;
+
+            if (score > 900 && !speedBoost900Applied) { player.speed = 3.5; roadSpeed = 4.4; enemyBaseSpeed = 2.8; speedBoost900Applied = true; }
+            if (score > 1500 && !speedBoost1500Applied) { player.speed = 6.5; roadSpeed = 8.1; enemyBaseSpeed = 5.2; speedBoost1500Applied = true; }
+            if (score > 2000 && !speedBoost2000Applied) { player.speed = 9.0; roadSpeed = 11.25; enemyBaseSpeed = 7.2; speedBoost2000Applied = true; }
+            if (score > 2500 && !speedBoost2500Applied) { player.speed = 11.5; roadSpeed = 14.4; enemyBaseSpeed = 9.2; speedBoost2500Applied = true; }
+            
+            enemies = enemies.filter(enemy => enemy.y < canvas.height);
+            let currentSpawnRate;
+            if (score > 5000) { currentSpawnRate = 0.043; } 
+            else if (score > 4000) { currentSpawnRate = 0.038; } 
+            else if (score > 2300) { currentSpawnRate = 0.032; } 
+            else { currentSpawnRate = 0.025; }
+            if (Math.random() < currentSpawnRate) spawnEnemy();
+
+            for (const enemy of enemies) {
+                if ((player.x + COLLISION_PADDING) < (enemy.x + enemy.width - COLLISION_PADDING) && (player.x + player.width - COLLISION_PADDING) > (enemy.x + COLLISION_PADDING) && (player.y + COLLISION_PADDING) < (enemy.y + enemy.height - COLLISION_PADDING) && (player.y + player.height - COLLISION_PADDING) > (enemy.y + COLLISION_PADDING)) {
+                    handleGameOver();
+                    break;
+                }
+            }
+            draw();
+            requestAnimationFrame(update);
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(roadImg, 0, roadY1, canvas.width, canvas.height);
+            ctx.drawImage(roadImg, 0, roadY2, canvas.width, canvas.height);
+            ctx.drawImage(playerImg, player.x, player.y, player.width, player.height);
+            enemies.forEach(enemy => { ctx.drawImage(enemy.img, enemy.x, enemy.y, enemy.width, enemy.height); });
+        }
+        
+        // --- Event Listeners and Initial Setup ---
+        playButton.addEventListener('click', startGame);
+        restartButton.addEventListener('click', startGame);
+        highScoreDisplay.innerText = `Highest Score: ${highScore}`;
+    </script>
+</body>
+</html>
